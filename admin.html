@@ -82,6 +82,17 @@
       </section>
       <div class="notice" style="margin-top:25px">Changes are saved to your Supabase database. Images uploaded here are stored in Supabase Storage. Your public portfolio must use the same project and read published records from the <code>works</code> table.</div>
 
+      <section class="panel" id="showreelPanel">
+        <div class="section-heading"><div><div class="eyebrow">HERO VIDEO</div><h2>SHOWREEL BACKGROUND</h2></div></div>
+        <p>Change the video that plays silently behind the homepage hero. Use a YouTube link or a direct MP4/WebM video URL.</p>
+        <form id="showreelForm">
+          <label for="showreelUrl">Showreel video URL</label>
+          <input id="showreelUrl" type="url" placeholder="https://www.youtube.com/watch?v=... or https://example.com/video.mp4" required>
+          <div class="actions"><button id="saveShowreelBtn" class="btn" type="submit">Save showreel</button></div>
+        </form>
+        <div id="showreelStatus" class="status" role="status" aria-live="polite"></div>
+      </section>
+
       <section class="panel" id="editorPanel">
         <div class="section-heading"><div><div class="eyebrow">WORK LIBRARY</div><h2 id="formHeading">ADD NEW WORK</h2></div><button id="cancelEditBtn" class="btn secondary hidden" type="button">Cancel edit</button></div>
         <form id="workForm">
@@ -128,13 +139,14 @@
     const SUPABASE_URL = 'https://wvvbhyucuulfuxkdcdyo.supabase.co';
     const SUPABASE_KEY = 'sb_publishable_pKDhqFX65YDMAWlZtNxmEg_rYTvNX3l';
     const BUCKET = 'portfolio-images';
+    const SHOWREEL_MARKER = '__void_homepage_showreel__';
     const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     const ALLOWED_TYPES = ['image/jpeg','image/png','image/webp','image/gif','image/avif'];
     const $ = id => document.getElementById(id);
     const loginView=$('loginView'), recoveryView=$('recoveryView'), dashboard=$('dashboard'), logoutBtn=$('logoutBtn');
     const recoveryStatus=$('recoveryStatus'), passwordStatus=$('passwordStatus');
     const loginStatus=$('loginStatus'), formStatus=$('formStatus'), listStatus=$('listStatus'), workList=$('workList');
-    let db, editingId=null, works=[], busy=false;
+    let db, editingId=null, works=[], busy=false, showreelRecord=null;
     // Track newly uploaded objects so a failed database save does not leave orphan files.
     let newlyUploadedPaths=[];
 
@@ -227,7 +239,10 @@
     async function loadWorks(){
       setStatus(listStatus,'Loading work…');
       try{const {data,error}=await db.from('works').select('*').order('sort_order',{ascending:true}).order('created_at',{ascending:false});if(error)throw error;
-        works=data||[];renderWorks();setStatus(listStatus,works.length+' work item(s) loaded.','success');
+        const rows=data||[];
+        showreelRecord=rows.find(w=>w.title===SHOWREEL_MARKER)||null;
+        if(showreelRecord)$('showreelUrl').value=showreelRecord.media_url||'';
+        works=rows.filter(w=>w.title!==SHOWREEL_MARKER);renderWorks();setStatus(listStatus,works.length+' work item(s) loaded.','success');
       }catch(e){setStatus(listStatus,friendlyError(e),'error');}
     }
     function extensionFor(file){const ext=(file.name.split('.').pop()||'').toLowerCase();return ['jpg','jpeg','png','webp','gif','avif'].includes(ext)?ext:(file.type==='image/png'?'png':file.type==='image/webp'?'webp':file.type==='image/gif'?'gif':file.type==='image/avif'?'avif':'jpg');}
@@ -277,6 +292,25 @@
         newlyUploadedPaths=[];resetForm();setStatus(formStatus,'Saved successfully.','success');await loadWorks();
       }catch(e){await cleanupNewUploads();setStatus(formStatus,friendlyError(e),'error');}
       finally{setBusy(false);updateMediaFields();}
+    }
+    async function saveShowreel(ev){
+      ev.preventDefault();if(busy)return;
+      const url=$('showreelUrl').value.trim();
+      if(!safeUrl(url)){setStatus($('showreelStatus'),'Enter a valid video URL starting with http:// or https://.','error');return;}
+      const yt=getYouTubeId(url);
+      const isDirectVideo=/\\.(mp4|webm|ogg)(\\?.*)?$/i.test(url);
+      if(!yt&&!isDirectVideo){setStatus($('showreelStatus'),'Use a valid YouTube video link or a direct MP4/WebM/OGG URL.','error');return;}
+      setBusy(true);setStatus($('showreelStatus'),'Saving showreel…');
+      try{
+        const payload={title:SHOWREEL_MARKER,category:'settings',media_type:yt?'youtube':'video',media_url:yt?url:url,thumbnail_url:null,description:'Internal homepage showreel setting',sort_order:-999999,is_published:true,updated_at:new Date().toISOString()};
+        let result;
+        if(showreelRecord)result=await db.from('works').update(payload).eq('id',showreelRecord.id).select('*').single();
+        else result=await db.from('works').insert(payload).select('*').single();
+        if(result.error)throw result.error;
+        showreelRecord=result.data;
+        setStatus($('showreelStatus'),'Showreel saved. The public homepage will use this video.','success');
+      }catch(e){setStatus($('showreelStatus'),friendlyError(e),'error');}
+      finally{setBusy(false);}
     }
     async function togglePublished(w){
       if(busy)return;setBusy(true);setStatus(listStatus,'Updating publication status…');
@@ -338,6 +372,7 @@
       }catch(e){setStatus(passwordStatus,'Could not change password: '+friendlyError(e),'error');}
       finally{setBusy(false);}
     });
+    $('showreelForm').addEventListener('submit',saveShowreel);
     $('workForm').addEventListener('submit',saveWork);$('resetBtn').addEventListener('click',resetForm);$('cancelEditBtn').addEventListener('click',resetForm);
     $('refreshBtn').addEventListener('click',loadWorks);$('filterCategory').addEventListener('change',renderWorks);$('filterStatus').addEventListener('change',renderWorks);
     logoutBtn.addEventListener('click',async()=>{if(busy)return;setBusy(true);try{const {error}=await db.auth.signOut();if(error)throw error;resetForm();showLogin();setStatus(loginStatus,'You have signed out.','success');}catch(e){setStatus(loginStatus,friendlyError(e),'error');}finally{setBusy(false);}});
